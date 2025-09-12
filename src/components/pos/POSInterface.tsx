@@ -32,7 +32,8 @@ import {
   Calendar,
   Clock,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
 import React from "react"; // Added missing import
 import { apiService } from "@/services/api";
@@ -60,6 +61,7 @@ interface Product {
   unitsPerPack: number;
   category: string;
   requiresPrescription: boolean;
+  barcode?: string;
 }
 
 interface Customer {
@@ -72,6 +74,42 @@ interface Customer {
   lastVisit: string;
   loyaltyPoints: number;
   isVIP: boolean;
+}
+
+interface Promotion {
+  id: string;
+  code: string;
+  name: string;
+  type: 'percentage' | 'fixed';
+  value: number;
+  minAmount?: number;
+  maxDiscount?: number;
+  validUntil?: string;
+  isActive: boolean;
+}
+
+interface SplitPayment {
+  id: string;
+  method: 'cash' | 'card' | 'mobile' | 'gift_card';
+  amount: number;
+  reference?: string;
+}
+
+interface RefundItem {
+  id: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  reason: string;
+}
+
+interface GiftCard {
+  id: string;
+  number: string;
+  balance: number;
+  isActive: boolean;
+  expiryDate?: string;
 }
 
 interface Receipt {
@@ -118,7 +156,22 @@ const POSInterface = () => {
   });
   const [invoiceItems, setInvoiceItems] = useState<CartItem[]>([]);
   const [invoiceSearchQuery, setInvoiceSearchQuery] = useState("");
-  const [invoiceSelectedCategory, setInvoiceSelectedCategory] = useState("all");
+  const [isScanning, setIsScanning] = useState(false);
+  const [scannedBarcode, setScannedBarcode] = useState("");
+  const [appliedPromotions, setAppliedPromotions] = useState<Promotion[]>([]);
+  const [promoCode, setPromoCode] = useState("");
+  const [discountAmount, setDiscountAmount] = useState(0);
+  const [splitPayments, setSplitPayments] = useState<SplitPayment[]>([]);
+  const [isSplitPayment, setIsSplitPayment] = useState(false);
+  const [isRefundDialogOpen, setIsRefundDialogOpen] = useState(false);
+  const [refundReceiptNumber, setRefundReceiptNumber] = useState("");
+  const [refundReason, setRefundReason] = useState("");
+  const [refundItems, setRefundItems] = useState<RefundItem[]>([]);
+  const [giftCardNumber, setGiftCardNumber] = useState("");
+  const [giftCardBalance, setGiftCardBalance] = useState(0);
+  const [giftCardAmount, setGiftCardAmount] = useState(0);
+  const [foundInvoice, setFoundInvoice] = useState<any>(null);
+  const [invoiceLookupLoading, setInvoiceLookupLoading] = useState(false);
 
   // Load selected customer from localStorage if coming from Customer Management
   React.useEffect(() => {
@@ -136,10 +189,27 @@ const POSInterface = () => {
 
   // Load products from API
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   React.useEffect(() => {
     loadProducts();
+    loadCategories();
+    
+    // Listen for product updates
+    const handleProductUpdate = () => {
+      loadProducts();
+    };
+    
+    window.addEventListener('productCreated', handleProductUpdate);
+    window.addEventListener('productUpdated', handleProductUpdate);
+    window.addEventListener('productDeleted', handleProductUpdate);
+    
+    return () => {
+      window.removeEventListener('productCreated', handleProductUpdate);
+      window.removeEventListener('productUpdated', handleProductUpdate);
+      window.removeEventListener('productDeleted', handleProductUpdate);
+    };
   }, []);
 
   const loadProducts = async () => {
@@ -158,7 +228,8 @@ const POSInterface = () => {
           unitType: product.unitType,
           unitsPerPack: product.unitsPerPack,
           category: product.category.name,
-          requiresPrescription: product.requiresPrescription
+          requiresPrescription: product.requiresPrescription,
+          barcode: product.barcode
         }));
         console.log('Transformed products:', transformedProducts);
         setProducts(transformedProducts);
@@ -167,6 +238,23 @@ const POSInterface = () => {
       console.error('Error loading products:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const response = await apiService.getCategories();
+      if (response.success) {
+        // Extract category names and add "all" option
+        const categoryNames = response.data.categories.map((cat: any) => cat.name);
+        setCategories(["all", ...categoryNames]);
+      } else {
+        console.error('Failed to load categories:', response.message);
+        setCategories(["all"]);
+      }
+    } catch (error) {
+      console.error('Error loading categories:', error);
+      setCategories(["all"]);
     }
   };
 
@@ -207,7 +295,6 @@ const POSInterface = () => {
     }
   ];
 
-  const categories = ["all", "Analgesics", "Antibiotics", "Vitamins", "Gastric", "Cough & Cold", "Ophthalmic", "Diabetes"];
 
   const getUnitIcon = (unitType: string) => {
     switch (unitType) {
@@ -265,12 +352,13 @@ const POSInterface = () => {
 
   const subtotal = cart.reduce((sum, item) => sum + item.totalPrice, 0);
   const tax = subtotal * 0.17; // 17% GST
-  const total = subtotal + tax;
+  const total = subtotal + tax - discountAmount;
 
   const paymentMethods = [
     { id: 'cash', label: 'Cash', icon: Banknote },
     { id: 'card', label: 'Card', icon: CreditCard },
-    { id: 'mobile', label: 'Mobile', icon: Smartphone }
+    { id: 'mobile', label: 'Mobile', icon: Smartphone },
+    { id: 'gift_card', label: 'Gift Card', icon: CreditCard }
   ];
 
   const filteredProducts = products.filter(product => {
@@ -281,9 +369,176 @@ const POSInterface = () => {
 
   const filteredInvoiceProducts = products.filter(product => {
     const matchesSearch = product.name.toLowerCase().includes(invoiceSearchQuery.toLowerCase());
-    const matchesCategory = invoiceSelectedCategory === "all" || product.category === invoiceSelectedCategory;
-    return matchesSearch && matchesCategory;
+    return matchesSearch;
   });
+
+  // Barcode scanning functionality
+  const handleBarcodeScan = async () => {
+    setIsScanning(true);
+    try {
+      // Check if browser supports camera access
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Camera access not supported in this browser');
+        return;
+      }
+
+      // For now, we'll use a simple prompt for barcode input
+      // In a real implementation, you would integrate with a barcode scanning library
+      const barcode = prompt('Enter barcode or scan QR code:');
+      if (barcode) {
+        setScannedBarcode(barcode);
+        await searchProductByBarcode(barcode);
+      }
+    } catch (error) {
+      console.error('Barcode scanning error:', error);
+      alert('Error accessing camera for barcode scanning');
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const searchProductByBarcode = async (barcode: string) => {
+    const product = products.find(p => p.barcode === barcode);
+    if (product) {
+      // Auto-add to cart
+      addToCart(product, 1, "pack");
+      setSearchQuery(product.name); // Update search to show the found product
+    } else {
+      alert(`Product with barcode ${barcode} not found`);
+    }
+  };
+
+  // Sample promotions data
+  const availablePromotions: Promotion[] = [
+    {
+      id: "1",
+      code: "WELCOME10",
+      name: "Welcome Discount",
+      type: "percentage",
+      value: 10,
+      minAmount: 1000,
+      maxDiscount: 500,
+      validUntil: "2024-12-31",
+      isActive: true
+    },
+    {
+      id: "2",
+      code: "SAVE50",
+      name: "Fixed Discount",
+      type: "fixed",
+      value: 50,
+      minAmount: 200,
+      validUntil: "2024-12-31",
+      isActive: true
+    },
+    {
+      id: "3",
+      code: "VIP20",
+      name: "VIP Customer Discount",
+      type: "percentage",
+      value: 20,
+      minAmount: 500,
+      maxDiscount: 1000,
+      validUntil: "2024-12-31",
+      isActive: true
+    }
+  ];
+
+  const applyPromotion = () => {
+    if (!promoCode.trim()) {
+      alert("Please enter a promotion code");
+      return;
+    }
+
+    const promotion = availablePromotions.find(p => 
+      p.code.toLowerCase() === promoCode.toLowerCase() && p.isActive
+    );
+
+    if (!promotion) {
+      alert("Invalid or expired promotion code");
+      return;
+    }
+
+    // Check if promotion is already applied
+    if (appliedPromotions.find(p => p.id === promotion.id)) {
+      alert("This promotion has already been applied");
+      return;
+    }
+
+    // Check minimum amount requirement
+    if (promotion.minAmount && subtotal < promotion.minAmount) {
+      alert(`Minimum purchase amount of PKR ${promotion.minAmount} required for this promotion`);
+      return;
+    }
+
+    // Check validity
+    if (promotion.validUntil && new Date(promotion.validUntil) < new Date()) {
+      alert("This promotion has expired");
+      return;
+    }
+
+    // Calculate discount
+    let discount = 0;
+    if (promotion.type === 'percentage') {
+      discount = (subtotal * promotion.value) / 100;
+      if (promotion.maxDiscount) {
+        discount = Math.min(discount, promotion.maxDiscount);
+      }
+    } else {
+      discount = promotion.value;
+    }
+
+    // Apply discount
+    setAppliedPromotions([...appliedPromotions, promotion]);
+    setDiscountAmount(discountAmount + discount);
+    setPromoCode("");
+    alert(`Promotion "${promotion.name}" applied! Discount: PKR ${discount.toFixed(2)}`);
+  };
+
+  const removePromotion = (promotionId: string) => {
+    const promotion = appliedPromotions.find(p => p.id === promotionId);
+    if (promotion) {
+      let discount = 0;
+      if (promotion.type === 'percentage') {
+        discount = (subtotal * promotion.value) / 100;
+        if (promotion.maxDiscount) {
+          discount = Math.min(discount, promotion.maxDiscount);
+        }
+      } else {
+        discount = promotion.value;
+      }
+      
+      setAppliedPromotions(appliedPromotions.filter(p => p.id !== promotionId));
+      setDiscountAmount(Math.max(0, discountAmount - discount));
+    }
+  };
+
+  // Split payment functionality
+  const addSplitPayment = (method: 'cash' | 'card' | 'mobile' | 'gift_card', amount: number, reference?: string) => {
+    const newPayment: SplitPayment = {
+      id: String(Date.now()),
+      method,
+      amount,
+      reference
+    };
+    setSplitPayments([...splitPayments, newPayment]);
+  };
+
+  const removeSplitPayment = (paymentId: string) => {
+    setSplitPayments(splitPayments.filter(p => p.id !== paymentId));
+  };
+
+  const getTotalSplitAmount = () => {
+    return splitPayments.reduce((sum, payment) => sum + payment.amount, 0);
+  };
+
+  const getRemainingAmount = () => {
+    return total - getTotalSplitAmount();
+  };
+
+  const isSplitPaymentComplete = () => {
+    return Math.abs(getRemainingAmount()) < 0.01; // Allow for small floating point differences
+  };
 
   const handleCashPayment = () => {
     const cash = parseFloat(cashAmount);
@@ -426,6 +681,7 @@ const POSInterface = () => {
     }
   };
 
+
   const createInvoice = async () => {
     if (!invoiceCustomer.name || !invoiceCustomer.phone) {
       alert("Please enter customer name and phone number!");
@@ -438,160 +694,109 @@ const POSInterface = () => {
     }
 
     try {
-      // Get branch ID - use user's branch or get first available branch
-      let branchId = user?.branchId;
-      if (!branchId) {
-        const branchesResponse = await apiService.getBranches();
-        if (branchesResponse.success && branchesResponse.data?.branches?.length > 0) {
-          branchId = branchesResponse.data.branches[0].id;
-        }
-      }
-
-      if (!branchId) {
-        alert("No branch available. Please contact administrator.");
-        return;
-      }
-
-      // Create customer in backend or find existing customer
+      // First, create or find customer
       let customerId = null;
       try {
-        // First try to find existing customer by phone
-        const existingCustomersResponse = await apiService.getCustomers({
-          search: invoiceCustomer.phone,
-          branchId: branchId
+        const customerResponse = await apiService.createCustomer({
+          name: invoiceCustomer.name,
+          phone: invoiceCustomer.phone,
+          email: invoiceCustomer.email || "",
+          address: invoiceCustomer.address || "",
+          branchId: (user as any)?.branchId || "branch_001"
         });
-
-        if (existingCustomersResponse.success && existingCustomersResponse.data?.customers?.length > 0) {
-          // Use existing customer
-          const existingCustomer = existingCustomersResponse.data.customers.find(
-            c => c.phone === invoiceCustomer.phone
-          );
-          if (existingCustomer) {
-            customerId = existingCustomer.id;
-            console.log('Using existing customer:', existingCustomer);
-          }
+        
+        if (customerResponse.success) {
+          customerId = customerResponse.data.id;
         }
-
-        // If no existing customer found, create new one
-        if (!customerId) {
-          const customerResponse = await apiService.createCustomer({
-            name: invoiceCustomer.name,
-            phone: invoiceCustomer.phone,
-            email: invoiceCustomer.email || "",
-            address: invoiceCustomer.address || "",
-            branchId: branchId
-          });
-
-          if (customerResponse.success && customerResponse.data) {
-            customerId = customerResponse.data.id;
-            console.log('Created new customer:', customerResponse.data);
-          } else {
-            console.warn('Customer creation failed:', customerResponse.message);
-            // Try to find customer again in case it was created by another process
-            const retryResponse = await apiService.getCustomers({
-              search: invoiceCustomer.phone,
-              branchId: branchId
-            });
-            if (retryResponse.success && retryResponse.data?.customers?.length > 0) {
-              const retryCustomer = retryResponse.data.customers.find(
-                c => c.phone === invoiceCustomer.phone
-              );
-              if (retryCustomer) {
-                customerId = retryCustomer.id;
-                console.log('Found customer on retry:', retryCustomer);
-              }
-            }
-          }
-        }
-      } catch (customerError) {
-        console.error('Error handling customer:', customerError);
-        // Continue with invoice creation even if customer handling fails
+      } catch (error) {
+        console.log('Customer creation failed, proceeding without customer ID');
       }
 
-      // Create sale in backend
+      // Prepare sale data for API
       const saleData = {
         customerId: customerId,
-        branchId: branchId,
+        branchId: (user as any)?.branchId || "branch_001",
         items: invoiceItems.map(item => ({
           productId: item.id,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
-          batchNumber: item.batch,
-          expiryDate: item.expiry
+          batchNumber: item.batch || "",
+          expiryDate: item.expiry || ""
         })),
         paymentMethod: 'CASH' as const,
-        discountAmount: 0
+        discountAmount: discountAmount
       };
 
+      console.log('Creating sale with data:', saleData);
+
+      // Create sale via API (this will reduce stock in database)
       const saleResponse = await apiService.createSale(saleData);
-
-      if (saleResponse.success && saleResponse.data) {
-        // Create receipt from sale response
-        const sale = saleResponse.data;
-        console.log('Sale response data:', sale);
-        console.log('Customer data in sale:', sale.customer);
-        const receipt: Receipt = {
-          id: sale.id,
-          customer: sale.customer ? {
-            id: sale.customer.id,
-            name: sale.customer.name,
-            phone: sale.customer.phone,
-            email: sale.customer.email || "",
-            address: sale.customer.address || "",
-            totalPurchases: sale.customer.totalPurchases || 0,
-            lastVisit: sale.customer.lastVisit ? new Date(sale.customer.lastVisit).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            loyaltyPoints: sale.customer.loyaltyPoints || 0,
-            isVIP: sale.customer.isVIP || false
-          } : null,
-          items: sale.items.map(item => ({
-            id: item.id,
-            name: item.product.name,
-            price: item.unitPrice,
-            quantity: item.quantity,
-            unitType: item.product.unitType,
-            unitPrice: item.unitPrice,
-            totalPrice: item.totalPrice,
-            batch: item.batchNumber || "",
-            expiry: item.expiryDate || "",
-            instructions: ""
-          })),
-          subtotal: sale.subtotal,
-          tax: sale.taxAmount,
-          total: sale.totalAmount,
-          paymentMethod: sale.paymentMethod.toLowerCase(),
-          paymentStatus: sale.paymentStatus,
-          date: new Date(sale.createdAt).toLocaleDateString(),
-          time: new Date(sale.createdAt).toLocaleTimeString(),
-          cashier: user?.name || "Cashier",
-          receiptNumber: sale.receiptNumber
-        };
-
-        setCurrentReceipt(receipt);
-        setIsReceiptDialogOpen(true);
-        setIsInvoiceDialogOpen(false);
-
-        // Reset invoice form
-        setInvoiceCustomer({
-          name: "",
-          phone: "",
-          email: "",
-          address: ""
-        });
-        setInvoiceItems([]);
-        setInvoiceSearchQuery("");
-        setInvoiceSelectedCategory("all");
-
-        // Reload products to update stock
-        await loadProducts();
-
-        // Notify customer management page to refresh
-        window.dispatchEvent(new CustomEvent('customerCreated', { 
-          detail: { customerId: customerId } 
-        }));
-      } else {
-        console.error('Sale creation failed:', saleResponse.message);
-        alert(`Error creating sale: ${saleResponse.message || 'Please try again.'}`);
+      
+      if (!saleResponse.success) {
+        alert(saleResponse.message || "Failed to create invoice. Please try again.");
+        return;
       }
+
+      const sale = saleResponse.data;
+      console.log('Sale created successfully:', sale);
+
+      // Create receipt for display
+      const receipt: Receipt = {
+        id: sale.id,
+        customer: {
+          id: customerId || "",
+          name: invoiceCustomer.name,
+          phone: invoiceCustomer.phone,
+          email: invoiceCustomer.email || "",
+          address: invoiceCustomer.address || "",
+          totalPurchases: sale.totalAmount,
+          loyaltyPoints: Math.floor(sale.totalAmount / 100),
+          isVIP: false,
+          lastVisit: new Date().toISOString().split('T')[0]
+        },
+        items: invoiceItems,
+        subtotal: sale.subtotal,
+        tax: sale.taxAmount,
+        total: sale.totalAmount,
+        paymentMethod: 'cash',
+        paymentStatus: 'Paid',
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString(),
+        cashier: user?.name || "Cashier",
+        receiptNumber: sale.receiptNumber
+      };
+
+      // Store the invoice in localStorage for the Invoices tab
+      const existingInvoices = JSON.parse(localStorage.getItem('mockInvoices') || '[]');
+      existingInvoices.unshift(sale);
+      localStorage.setItem('mockInvoices', JSON.stringify(existingInvoices));
+
+      setCurrentReceipt(receipt);
+      setIsReceiptDialogOpen(true);
+      setIsInvoiceDialogOpen(false);
+
+      // Reset invoice form
+      setInvoiceCustomer({
+        name: "",
+        phone: "",
+        email: "",
+        address: ""
+      });
+      setInvoiceItems([]);
+      setInvoiceSearchQuery("");
+      setAppliedPromotions([]);
+      setPromoCode("");
+      setDiscountAmount(0);
+
+      // Reload products to update stock (this will show the reduced quantities)
+      await loadProducts();
+
+      // Notify other components about new invoice
+      window.dispatchEvent(new CustomEvent('invoiceCreated', { 
+        detail: { invoice: sale } 
+      }));
+
+      alert(`Invoice created successfully!\n\nInvoice Number: ${sale.id}\nReceipt Number: ${sale.receiptNumber}\nTotal Amount: PKR ${sale.totalAmount.toFixed(2)}`);
 
     } catch (error) {
       console.error('Error creating invoice:', error);
@@ -806,6 +1011,508 @@ const POSInterface = () => {
     alert("Receipt download functionality will be implemented here");
   };
 
+  const sendSMSReceipt = async () => {
+    if (!currentReceipt?.customer?.phone) {
+      alert("Customer phone number is required to send SMS receipt");
+      return;
+    }
+
+    try {
+      // In a real implementation, you would call an SMS API service
+      const smsMessage = `Thank you for your purchase at MediBill Pulse Pharmacy!
+Receipt: ${currentReceipt.receiptNumber}
+Total: PKR ${currentReceipt.total.toFixed(2)}
+Date: ${currentReceipt.date} ${currentReceipt.time}
+
+Items:
+${currentReceipt.items.map(item => `• ${item.name} - ${item.quantity} ${item.unitType} - PKR ${item.totalPrice.toFixed(2)}`).join('\n')}
+
+Thank you for choosing us!`;
+
+      // Simulate SMS sending
+      alert(`SMS receipt sent to ${currentReceipt.customer.phone}:\n\n${smsMessage}`);
+    } catch (error) {
+      console.error('Error sending SMS:', error);
+      alert('Error sending SMS receipt. Please try again.');
+    }
+  };
+
+  const sendEmailReceipt = async () => {
+    if (!currentReceipt?.customer?.email) {
+      alert("Customer email address is required to send email receipt");
+      return;
+    }
+
+    try {
+      // In a real implementation, you would call an email API service
+      const emailSubject = `Receipt from MediBill Pulse Pharmacy - ${currentReceipt.receiptNumber}`;
+      
+      const emailBody = `
+Dear ${currentReceipt.customer.name},
+
+Thank you for your purchase at MediBill Pulse Pharmacy!
+
+Receipt Details:
+- Receipt Number: ${currentReceipt.receiptNumber}
+- Date: ${currentReceipt.date}
+- Time: ${currentReceipt.time}
+- Cashier: ${currentReceipt.cashier}
+
+Items Purchased:
+${currentReceipt.items.map(item => `
+• ${item.name}
+  Quantity: ${item.quantity} ${item.unitType}
+  Unit Price: PKR ${item.unitPrice.toFixed(2)}
+  Total: PKR ${item.totalPrice.toFixed(2)}
+`).join('')}
+
+Summary:
+- Subtotal: PKR ${currentReceipt.subtotal.toFixed(2)}
+- GST (17%): PKR ${currentReceipt.tax.toFixed(2)}
+- Total: PKR ${currentReceipt.total.toFixed(2)}
+- Payment Method: ${currentReceipt.paymentMethod.toUpperCase()}
+
+Please keep this receipt for your records.
+
+Important: Follow dosage instructions carefully. Consult your doctor if you have any questions.
+
+Thank you for choosing MediBill Pulse Pharmacy!
+Your Health, Our Priority
+
+Best regards,
+MediBill Pulse Pharmacy Team
+      `;
+
+      // Simulate email sending
+      alert(`Email receipt sent to ${currentReceipt.customer.email}:\n\nSubject: ${emailSubject}\n\n${emailBody}`);
+    } catch (error) {
+      console.error('Error sending email:', error);
+      alert('Error sending email receipt. Please try again.');
+    }
+  };
+
+  // Mock invoice data for testing
+  const mockInvoices = [
+    {
+      id: "sale_001",
+      customerId: "cust_001",
+      userId: "user_001",
+      branchId: "branch_001",
+      subtotal: 1500.00,
+      taxAmount: 255.00,
+      discountAmount: 0,
+      totalAmount: 1755.00,
+      paymentMethod: "CASH",
+      paymentStatus: "COMPLETED",
+      status: "COMPLETED",
+      createdAt: "2024-01-15T10:30:00Z",
+      customer: {
+        id: "cust_001",
+        name: "Ahmad Khan",
+        phone: "+92 300 1234567",
+        email: "ahmad.khan@email.com",
+        address: "Block A, Gulberg, Lahore"
+      },
+      user: {
+        id: "user_001",
+        name: "Dr. Ahmed Khan",
+        username: "ahmed.khan"
+      },
+      branch: {
+        id: "branch_001",
+        name: "Main Branch",
+        address: "123 Main Street, Lahore"
+      },
+      items: [
+        {
+          id: "item_001",
+          productId: "prod_001",
+          quantity: 2,
+          unitPrice: 500.00,
+          totalPrice: 1000.00,
+          batchNumber: "BT001",
+          expiryDate: "2025-12-31T00:00:00Z",
+          product: {
+            id: "prod_001",
+            name: "Paracetamol 500mg",
+            unitType: "tablets",
+            barcode: "1234567890123"
+          }
+        },
+        {
+          id: "item_002",
+          productId: "prod_002",
+          quantity: 1,
+          unitPrice: 500.00,
+          totalPrice: 500.00,
+          batchNumber: "BT002",
+          expiryDate: "2025-06-30T00:00:00Z",
+          product: {
+            id: "prod_002",
+            name: "Ibuprofen 400mg",
+            unitType: "tablets",
+            barcode: "1234567890124"
+          }
+        }
+      ],
+      receipts: [
+        {
+          id: "receipt_001",
+          receiptNumber: "RCP-20240115-001",
+          printedAt: "2024-01-15T10:30:00Z"
+        }
+      ]
+    },
+    {
+      id: "sale_002",
+      customerId: "cust_002",
+      userId: "user_001",
+      branchId: "branch_001",
+      subtotal: 800.00,
+      taxAmount: 136.00,
+      discountAmount: 50.00,
+      totalAmount: 886.00,
+      paymentMethod: "CARD",
+      paymentStatus: "COMPLETED",
+      status: "COMPLETED",
+      createdAt: "2024-01-14T14:20:00Z",
+      customer: {
+        id: "cust_002",
+        name: "Fatima Ali",
+        phone: "+92 301 2345678",
+        email: "fatima.ali@email.com",
+        address: "DHA Phase 5, Karachi"
+      },
+      user: {
+        id: "user_001",
+        name: "Dr. Ahmed Khan",
+        username: "ahmed.khan"
+      },
+      branch: {
+        id: "branch_001",
+        name: "Main Branch",
+        address: "123 Main Street, Lahore"
+      },
+      items: [
+        {
+          id: "item_003",
+          productId: "prod_003",
+          quantity: 1,
+          unitPrice: 800.00,
+          totalPrice: 800.00,
+          batchNumber: "BT003",
+          expiryDate: "2025-03-15T00:00:00Z",
+          product: {
+            id: "prod_003",
+            name: "Vitamin D3 1000IU",
+            unitType: "capsules",
+            barcode: "1234567890125"
+          }
+        }
+      ],
+      receipts: [
+        {
+          id: "receipt_002",
+          receiptNumber: "RCP-20240114-002",
+          printedAt: "2024-01-14T14:20:00Z"
+        }
+      ]
+    }
+  ];
+
+  // Invoice lookup functionality
+  const lookupInvoice = async () => {
+    if (!refundReceiptNumber.trim()) {
+      alert("Please enter a receipt number");
+      return;
+    }
+
+    try {
+      setInvoiceLookupLoading(true);
+      
+      // Simulate API delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Load invoices from localStorage (same source as Invoices tab)
+      const storedInvoices = localStorage.getItem('mockInvoices');
+      let allInvoices = mockInvoices; // Fallback to mock data
+      
+      if (storedInvoices) {
+        try {
+          allInvoices = JSON.parse(storedInvoices);
+        } catch (e) {
+          console.warn('Error parsing stored invoices, using mock data');
+        }
+      }
+      
+      // Find invoice by receipt number
+      const foundInvoice = allInvoices.find(invoice => 
+        invoice.receipts.some(receipt => 
+          receipt.receiptNumber.toLowerCase() === refundReceiptNumber.toLowerCase()
+        )
+      );
+      
+      if (foundInvoice) {
+        setFoundInvoice(foundInvoice);
+        alert(`Invoice found! Receipt: ${foundInvoice.receipts[0]?.receiptNumber || 'N/A'}`);
+      } else {
+        const availableReceipts = allInvoices.map(invoice => invoice.receipts[0]?.receiptNumber).filter(Boolean).join(', ');
+        alert(`Invoice not found. Available receipts: ${availableReceipts || 'None'}`);
+        setFoundInvoice(null);
+      }
+    } catch (error: any) {
+      console.error('Error looking up invoice:', error);
+      alert('Error looking up invoice. Please try again.');
+      setFoundInvoice(null);
+    } finally {
+      setInvoiceLookupLoading(false);
+    }
+  };
+
+  // Process refund for found invoice
+  const processInvoiceRefund = async () => {
+    if (!foundInvoice) {
+      alert("No invoice found to refund");
+      return;
+    }
+
+    if (!refundReason.trim()) {
+      alert("Please enter a refund reason");
+      return;
+    }
+
+    try {
+      // Simulate processing delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Process refund for all items in the invoice
+      const totalRefundAmount = foundInvoice.totalAmount;
+      
+      // Create refund record
+      const refundRecord = {
+        id: `refund_${Date.now()}`,
+        originalInvoiceId: foundInvoice.id,
+        originalInvoiceNumber: foundInvoice.invoiceNumber,
+        receiptNumber: foundInvoice.receipts[0]?.receiptNumber,
+        refundAmount: totalRefundAmount,
+        refundReason: refundReason,
+        refundedAt: new Date().toISOString(),
+        refundedBy: user?.name || "Cashier",
+        items: foundInvoice.items.map((item: any) => ({
+          productId: item.productId,
+          productName: item.product.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          totalPrice: item.totalPrice,
+          unitType: item.product.unitType
+        })),
+        customer: foundInvoice.customer
+      };
+
+      // Store refund record in localStorage
+      const existingRefunds = JSON.parse(localStorage.getItem('refundedInvoices') || '[]');
+      existingRefunds.unshift(refundRecord);
+      localStorage.setItem('refundedInvoices', JSON.stringify(existingRefunds));
+
+      // Update the original invoice to mark as refunded
+      const storedInvoices = localStorage.getItem('mockInvoices');
+      if (storedInvoices) {
+        try {
+          const allInvoices = JSON.parse(storedInvoices);
+          const updatedInvoices = allInvoices.map((invoice: any) => 
+            invoice.id === foundInvoice.id 
+              ? { ...invoice, status: 'REFUNDED', refundedAt: new Date().toISOString() }
+              : invoice
+          );
+          localStorage.setItem('mockInvoices', JSON.stringify(updatedInvoices));
+        } catch (e) {
+          console.warn('Error updating invoice status');
+        }
+      }
+
+      // Restore stock in database for each refunded item
+      console.log('Restoring stock for refunded items:', foundInvoice.items.map(item => ({
+        productId: item.productId,
+        productName: item.product.name,
+        quantity: item.quantity,
+        reason: 'Refund - Item returned',
+        reference: foundInvoice.id
+      })));
+
+      // Update stock for each refunded item
+      for (const item of foundInvoice.items) {
+        try {
+          const stockResponse = await apiService.updateStock(item.productId, {
+            type: 'IN',
+            quantity: item.quantity,
+            reason: 'Refund - Item returned',
+            reference: foundInvoice.id
+          });
+          
+          if (stockResponse.success) {
+            console.log(`Stock restored for ${item.product.name}: +${item.quantity} units`);
+          } else {
+            console.error(`Failed to restore stock for ${item.product.name}:`, stockResponse.message);
+          }
+        } catch (error) {
+          console.error(`Error restoring stock for ${item.product.name}:`, error);
+        }
+      }
+
+      // Reload products to update the UI
+      await loadProducts();
+
+      alert(`Refund processed successfully!
+      
+Receipt: ${foundInvoice.receipts[0]?.receiptNumber || 'N/A'}
+Refund Amount: PKR ${totalRefundAmount.toFixed(2)}
+Reason: ${refundReason}
+
+Items Refunded:
+${foundInvoice.items.map((item: any) => `• ${item.product.name} - ${item.quantity} ${item.product.unitType} - PKR ${item.totalPrice.toFixed(2)}`).join('\n')}
+
+All items have been restored to inventory.
+Invoice marked as refunded.`);
+
+      // Reset form
+      setRefundReceiptNumber("");
+      setRefundReason("");
+      setFoundInvoice(null);
+      setIsRefundDialogOpen(false);
+
+      // Notify other components about the refund
+      window.dispatchEvent(new CustomEvent('invoiceRefunded', { 
+        detail: { refund: refundRecord } 
+      }));
+
+    } catch (error) {
+      console.error('Error processing refund:', error);
+      alert('Error processing refund. Please try again.');
+    }
+  };
+
+  // Refund and return functionality
+  const processRefund = async () => {
+    if (!refundReceiptNumber.trim()) {
+      alert("Please enter a receipt number");
+      return;
+    }
+
+    if (refundItems.length === 0) {
+      alert("Please add items to refund");
+      return;
+    }
+
+    try {
+      // In a real implementation, you would call the backend API to process refund
+      const totalRefundAmount = refundItems.reduce((sum, item) => sum + item.totalPrice, 0);
+      
+      // Simulate refund processing
+      alert(`Refund processed successfully!
+      
+Receipt Number: ${refundReceiptNumber}
+Refund Amount: PKR ${totalRefundAmount.toFixed(2)}
+Reason: ${refundReason}
+
+Items Refunded:
+${refundItems.map(item => `• ${item.name} - ${item.quantity} units - PKR ${item.totalPrice.toFixed(2)}`).join('\n')}
+
+Refund will be processed within 3-5 business days.`);
+
+      // Reset refund form
+      setRefundReceiptNumber("");
+      setRefundReason("");
+      setRefundItems([]);
+      setIsRefundDialogOpen(false);
+    } catch (error) {
+      console.error('Error processing refund:', error);
+      alert('Error processing refund. Please try again.');
+    }
+  };
+
+  const addRefundItem = (item: CartItem, quantity: number, reason: string) => {
+    if (quantity <= 0) return;
+
+    const refundItem: RefundItem = {
+      id: item.id,
+      name: item.name,
+      quantity: quantity,
+      unitPrice: item.unitPrice,
+      totalPrice: item.unitPrice * quantity,
+      reason: reason
+    };
+
+    setRefundItems([...refundItems, refundItem]);
+  };
+
+  const removeRefundItem = (itemId: string) => {
+    setRefundItems(refundItems.filter(item => item.id !== itemId));
+  };
+
+  // Gift card functionality
+  const validateGiftCard = async (cardNumber: string) => {
+    // In a real implementation, you would call the backend API to validate the gift card
+    // For demo purposes, we'll simulate some gift cards
+    const sampleGiftCards: GiftCard[] = [
+      { id: "1", number: "1234567890123456", balance: 500, isActive: true, expiryDate: "2025-12-31" },
+      { id: "2", number: "2345678901234567", balance: 1000, isActive: true, expiryDate: "2025-06-30" },
+      { id: "3", number: "3456789012345678", balance: 250, isActive: true, expiryDate: "2024-12-31" },
+      { id: "4", number: "4567890123456789", balance: 0, isActive: false, expiryDate: "2023-12-31" }
+    ];
+
+    const giftCard = sampleGiftCards.find(card => card.number === cardNumber);
+    
+    if (!giftCard) {
+      alert("Gift card not found");
+      return false;
+    }
+
+    if (!giftCard.isActive) {
+      alert("Gift card is inactive");
+      return false;
+    }
+
+    if (giftCard.expiryDate && new Date(giftCard.expiryDate) < new Date()) {
+      alert("Gift card has expired");
+      return false;
+    }
+
+    setGiftCardBalance(giftCard.balance);
+    return true;
+  };
+
+  const applyGiftCard = () => {
+    if (!giftCardNumber.trim()) {
+      alert("Please enter a gift card number");
+      return;
+    }
+
+    if (giftCardAmount <= 0) {
+      alert("Please enter a valid amount");
+      return;
+    }
+
+    if (giftCardAmount > giftCardBalance) {
+      alert(`Insufficient balance. Available: PKR ${giftCardBalance.toFixed(2)}`);
+      return;
+    }
+
+    if (giftCardAmount > total) {
+      alert(`Amount cannot exceed total. Total: PKR ${total.toFixed(2)}`);
+      return;
+    }
+
+    // Add gift card payment to split payments
+    addSplitPayment('gift_card', giftCardAmount, giftCardNumber);
+    
+    // Reset gift card form
+    setGiftCardNumber("");
+    setGiftCardAmount(0);
+    setGiftCardBalance(0);
+    
+    alert(`Gift card applied successfully! Amount: PKR ${giftCardAmount.toFixed(2)}`);
+  };
+
   return (
     <div className="p-6 bg-background min-h-screen">
       <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
@@ -818,13 +1525,23 @@ const POSInterface = () => {
               <Search className="w-5 h-5 text-primary" />
               <span>Pharmacy Product Search</span>
             </CardTitle>
-              <Button
-                onClick={() => setIsInvoiceDialogOpen(true)}
-                className="text-white bg-[linear-gradient(135deg,#1C623C_0%,#247449_50%,#6EB469_100%)] hover:opacity-90"
-              >
-                <Receipt className="w-4 h-4 mr-2" />
-                Create Invoice for New Customer
-              </Button>
+              <div className="flex space-x-2">
+                <Button
+                  onClick={() => setIsInvoiceDialogOpen(true)}
+                  className="text-white bg-[linear-gradient(135deg,#1C623C_0%,#247449_50%,#6EB469_100%)] hover:opacity-90"
+                >
+                  <Receipt className="w-4 h-4 mr-2" />
+                  Create Invoice for New Customer
+                </Button>
+                <Button
+                  onClick={() => setIsRefundDialogOpen(true)}
+                  variant="outline"
+                  className="text-red-600 border-red-600 hover:bg-red-50"
+                >
+                  <AlertCircle className="w-4 h-4 mr-2" />
+                  Refunds & Returns
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -839,8 +1556,25 @@ const POSInterface = () => {
                   className="pl-10 h-12"
                 />
               </div>
-              <Button size="lg" variant="outline" className="px-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadProducts}
+                disabled={loading}
+                className="h-12 px-3"
+                title="Refresh Products"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </Button>
+              <Button 
+                size="lg" 
+                variant="outline" 
+                className="px-4"
+                onClick={handleBarcodeScan}
+                disabled={isScanning}
+              >
                 <Scan className="w-5 h-5" />
+                {isScanning ? 'Scanning...' : 'Scan'}
               </Button>
             </div>
 
@@ -868,21 +1602,12 @@ const POSInterface = () => {
                 <Card key={product.id} className="cursor-pointer hover:shadow-medium transition-shadow">
                   <CardContent className="p-4">
                     <div className="space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <h4 className="font-medium text-sm text-foreground">{product.name}</h4>
-                          <div className="flex items-center space-x-2 mt-1">
-                            {getUnitIcon(product.unitType)}
-                            <span className="text-xs text-muted-foreground capitalize">
-                              {product.unitType} • {product.unitsPerPack} per pack
-                            </span>
-                          </div>
-                        </div>
-                        {product.requiresPrescription && (
-                          <Badge variant="secondary" className="text-xs">Rx Required</Badge>
-                        )}
+                      {/* Product Name */}
+                      <div className="text-center">
+                        <h4 className="font-medium text-sm text-foreground mb-2">{product.name}</h4>
                       </div>
 
+                      {/* Price and Stock */}
                       <div className="flex items-center justify-between">
                         <span className="text-lg font-bold text-primary">PKR {product.price}</span>
                         <Badge variant="outline" className="text-xs">
@@ -890,92 +1615,6 @@ const POSInterface = () => {
                         </Badge>
                       </div>
 
-                      <div className="space-y-3">
-                        {/* Pack Quantity Input */}
-                        <div className="space-y-2">
-                          <Label className="text-xs font-medium text-muted-foreground">Add Packs</Label>
-                          <div className="flex space-x-2">
-                            <Input
-                              type="number"
-                              min="0"
-                              placeholder="0"
-                              className="flex-1 h-8 text-sm"
-                              id={`pack-${product.id}`}
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="px-3"
-                              onClick={() => {
-                                const input = document.getElementById(`pack-${product.id}`) as HTMLInputElement;
-                                const quantity = parseInt(input.value) || 0;
-                                if (quantity > 0) {
-                                  addToCart(product, quantity, "pack");
-                                  input.value = "";
-                                }
-                              }}
-                            >
-                              <Package className="w-4 h-4 mr-1" />
-                              Add Pack
-                            </Button>
-                          </div>
-                        </div>
-
-                        {/* Individual Unit Quantity Input */}
-                        <div className="space-y-2">
-                          <Label className="text-xs font-medium text-muted-foreground">Add Individual {product.unitType}</Label>
-                          <div className="flex space-x-2">
-                            <Input
-                              type="number"
-                              min="0"
-                              placeholder="0"
-                              className="flex-1 h-8 text-sm"
-                              id={`unit-${product.id}`}
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="px-3"
-                              onClick={() => {
-                                const input = document.getElementById(`unit-${product.id}`) as HTMLInputElement;
-                                const quantity = parseInt(input.value) || 0;
-                                if (quantity > 0) {
-                                  addToCart(product, quantity, product.unitType);
-                                  input.value = "";
-                                }
-                              }}
-                            >
-                              {getUnitIcon(product.unitType)}
-                              <span className="ml-1">Add</span>
-                            </Button>
-                          </div>
-                        </div>
-
-                        {/* Quick Add Buttons */}
-                        <div className="space-y-2">
-                          <Label className="text-xs font-medium text-muted-foreground">Quick Add</Label>
-                          <div className="grid grid-cols-2 gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-xs"
-                              onClick={() => addToCart(product, 1, "pack")}
-                            >
-                              <Package className="w-3 h-3 mr-1" />
-                              1 Pack
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-xs"
-                              onClick={() => addToCart(product, 1, product.unitType)}
-                            >
-                              {getUnitIcon(product.unitType)}
-                              <span className="ml-1">1 {product.unitType.slice(0, -1)}</span>
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -983,6 +1622,14 @@ const POSInterface = () => {
             </div>
           </CardContent>
         </Card>
+
+
+
+
+
+
+
+
 
        
       </div>
@@ -1002,6 +1649,18 @@ const POSInterface = () => {
                   <Download className="w-4 h-4 mr-2" />
                   Download
                 </Button>
+                {currentReceipt?.customer?.phone && (
+                  <Button variant="outline" size="sm" onClick={sendSMSReceipt}>
+                    <Phone className="w-4 h-4 mr-2" />
+                    SMS
+                  </Button>
+                )}
+                {currentReceipt?.customer?.email && (
+                  <Button variant="outline" size="sm" onClick={sendEmailReceipt}>
+                    <Mail className="w-4 h-4 mr-2" />
+                    Email
+                  </Button>
+                )}
               </div>
             </DialogTitle>
           </DialogHeader>
@@ -1180,7 +1839,15 @@ const POSInterface = () => {
       </Dialog>
 
       {/* Invoice Creation Dialog */}
-      <Dialog open={isInvoiceDialogOpen} onOpenChange={setIsInvoiceDialogOpen}>
+      <Dialog open={isInvoiceDialogOpen} onOpenChange={(open) => {
+        setIsInvoiceDialogOpen(open);
+        if (!open) {
+          // Reset promotions when dialog is closed
+          setAppliedPromotions([]);
+          setPromoCode("");
+          setDiscountAmount(0);
+        }
+      }}>
         <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center space-x-2">
@@ -1251,23 +1918,6 @@ const POSInterface = () => {
                   />
                 </div>
 
-                {/* Category Filter */}
-                <div className="flex flex-wrap gap-2">
-                  {categories.map((category) => (
-                    <Button
-                      key={category}
-                      variant={invoiceSelectedCategory === category ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setInvoiceSelectedCategory(category)}
-                      className={`capitalize ${invoiceSelectedCategory === category
-                          ? "text-white bg-[linear-gradient(135deg,#1C623C_0%,#247449_50%,#6EB469_100%)]"
-                          : ""
-                        }`}
-                    >
-                      {category}
-                    </Button>
-                  ))}
-                </div>
 
                 {/* Products List */}
                 <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -1405,6 +2055,62 @@ const POSInterface = () => {
                 )}
               </div>
 
+              {/* Promotions & Discounts Section */}
+              {invoiceItems.length > 0 && (
+                <div className="space-y-3 border-t pt-4">
+                  <h4 className="font-medium text-sm">Promotions & Discounts</h4>
+                  
+                  {/* Applied Promotions */}
+                  {appliedPromotions.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Applied Promotions:</p>
+                      {appliedPromotions.map((promotion) => (
+                        <div key={promotion.id} className="flex items-center justify-between p-2 bg-green-50 rounded-lg">
+                          <div>
+                            <p className="text-sm font-medium text-green-800">{promotion.name}</p>
+                            <p className="text-xs text-green-600">Code: {promotion.code}</p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removePromotion(promotion.id)}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Apply Promotion */}
+                  <div className="flex space-x-2">
+                    <Input
+                      placeholder="Enter promotion code"
+                      value={promoCode}
+                      onChange={(e) => setPromoCode(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      onClick={applyPromotion}
+                      variant="outline"
+                      size="sm"
+                      disabled={!promoCode.trim()}
+                    >
+                      Apply
+                    </Button>
+                  </div>
+
+                  {/* Discount Amount Display */}
+                  {discountAmount > 0 && (
+                    <div className="flex justify-between items-center p-2 bg-green-50 rounded-lg">
+                      <span className="text-sm font-medium text-green-800">Discount Applied</span>
+                      <span className="text-sm font-bold text-green-800">-PKR {discountAmount.toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Totals */}
               {invoiceItems.length > 0 && (
                 <div className="space-y-2 border-t pt-4">
@@ -1416,10 +2122,16 @@ const POSInterface = () => {
                     <span className="text-muted-foreground">GST (17%)</span>
                     <span className="font-medium">PKR {(invoiceItems.reduce((sum, item) => sum + item.totalPrice, 0) * 0.17).toFixed(2)}</span>
                   </div>
+                  {discountAmount > 0 && (
+                    <div className="flex justify-between text-sm text-green-600">
+                      <span>Discount</span>
+                      <span>-PKR {discountAmount.toFixed(2)}</span>
+                    </div>
+                  )}
                   <Separator />
                   <div className="flex justify-between text-lg font-bold">
                     <span>Total</span>
-                    <span className="text-primary">PKR {(invoiceItems.reduce((sum, item) => sum + item.totalPrice, 0) * 1.17).toFixed(2)}</span>
+                    <span className="text-primary">PKR {((invoiceItems.reduce((sum, item) => sum + item.totalPrice, 0) * 1.17) - discountAmount).toFixed(2)}</span>
                   </div>
                 </div>
               )}
@@ -1442,6 +2154,210 @@ const POSInterface = () => {
                   Create Invoice & Print Receipt
                 </Button>
               </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Refunds & Returns Dialog */}
+      <Dialog open={isRefundDialogOpen} onOpenChange={(open) => {
+        setIsRefundDialogOpen(open);
+        if (!open) {
+          // Reset form when dialog is closed
+          setRefundReceiptNumber("");
+          setRefundReason("");
+          setFoundInvoice(null);
+          setRefundItems([]);
+        }
+      }}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center space-x-2">
+              <AlertCircle className="w-5 h-5 text-red-600" />
+              <span>Refunds & Returns</span>
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-6">
+            {/* Invoice Lookup Form */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Invoice Lookup</h3>
+              <div className="flex space-x-2">
+                <Input
+                  placeholder="Enter invoice/receipt number"
+                  value={refundReceiptNumber}
+                  onChange={(e) => setRefundReceiptNumber(e.target.value)}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={lookupInvoice}
+                  variant="outline"
+                  disabled={invoiceLookupLoading}
+                >
+                  {invoiceLookupLoading ? 'Looking up...' : 'Lookup Invoice'}
+                </Button>
+                <Button
+                  onClick={() => {
+                    // Load invoices from localStorage (same source as lookup)
+                    const storedInvoices = localStorage.getItem('mockInvoices');
+                    let allInvoices = mockInvoices; // Fallback to mock data
+                    
+                    if (storedInvoices) {
+                      try {
+                        allInvoices = JSON.parse(storedInvoices);
+                      } catch (e) {
+                        console.warn('Error parsing stored invoices, using mock data');
+                      }
+                    }
+                    
+                    const receiptNumbers = allInvoices.map(invoice => invoice.receipts[0]?.receiptNumber).filter(Boolean).join('\n');
+                    alert(`Available Receipt Numbers:\n\n${receiptNumbers || 'None'}\n\nTry entering one of these receipt numbers to test the refund functionality.`);
+                  }}
+                  variant="outline"
+                  className="text-blue-600 border-blue-600 hover:bg-blue-50"
+                >
+                  Show Available
+                </Button>
+              </div>
+            </div>
+
+            {/* Found Invoice Display */}
+            {foundInvoice && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Found Invoice</h3>
+                <Card className="border-green-200 bg-green-50">
+                  <CardContent className="p-4">
+                    <div className="space-y-3">
+                      {/* Invoice Header */}
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-semibold text-lg">Receipt: {foundInvoice.receipts[0]?.receiptNumber || 'N/A'}</h4>
+                          <p className="text-sm text-muted-foreground">
+                            Date: {new Date(foundInvoice.createdAt).toLocaleDateString()} {new Date(foundInvoice.createdAt).toLocaleTimeString()}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            Cashier: {foundInvoice.user.name}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-bold text-green-600">
+                            PKR {foundInvoice.totalAmount.toFixed(2)}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {foundInvoice.paymentMethod} • {foundInvoice.paymentStatus}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Customer Info */}
+                      {foundInvoice.customer && (
+                        <div className="border-t pt-3">
+                          <h5 className="font-medium text-sm mb-2">Customer Information</h5>
+                          <div className="grid grid-cols-2 gap-2 text-sm">
+                            <p><strong>Name:</strong> {foundInvoice.customer.name}</p>
+                            <p><strong>Phone:</strong> {foundInvoice.customer.phone}</p>
+                            {foundInvoice.customer.email && (
+                              <p><strong>Email:</strong> {foundInvoice.customer.email}</p>
+                            )}
+                            {foundInvoice.customer.address && (
+                              <p><strong>Address:</strong> {foundInvoice.customer.address}</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Items List */}
+                      <div className="border-t pt-3">
+                        <h5 className="font-medium text-sm mb-2">Items in Invoice</h5>
+                        <div className="space-y-2">
+                          {foundInvoice.items.map((item: any, index: number) => (
+                            <div key={index} className="flex justify-between items-center p-2 bg-white rounded border">
+                              <div className="flex-1">
+                                <p className="font-medium text-sm">{item.product.name}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {item.quantity} {item.product.unitType} × PKR {item.unitPrice.toFixed(2)}
+                                  {item.batchNumber && ` • Batch: ${item.batchNumber}`}
+                                  {item.expiryDate && ` • Exp: ${new Date(item.expiryDate).toLocaleDateString()}`}
+                                </p>
+                              </div>
+                              <p className="font-semibold text-sm">PKR {item.totalPrice.toFixed(2)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Invoice Summary */}
+                      <div className="border-t pt-3">
+                        <div className="space-y-1 text-sm">
+                          <div className="flex justify-between">
+                            <span>Subtotal:</span>
+                            <span>PKR {foundInvoice.subtotal.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>GST (17%):</span>
+                            <span>PKR {foundInvoice.taxAmount.toFixed(2)}</span>
+                          </div>
+                          {foundInvoice.discountAmount > 0 && (
+                            <div className="flex justify-between text-green-600">
+                              <span>Discount:</span>
+                              <span>-PKR {foundInvoice.discountAmount.toFixed(2)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between font-bold text-lg border-t pt-1">
+                            <span>Total:</span>
+                            <span>PKR {foundInvoice.totalAmount.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Button */}
+                      <div className="border-t pt-3">
+                        <Button
+                          onClick={processInvoiceRefund}
+                          className="w-full text-white bg-red-600 hover:bg-red-700"
+                        >
+                          <AlertCircle className="w-4 h-4 mr-2" />
+                          Process Full Refund & Return Items to Stock
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* Refund Reason */}
+            {foundInvoice && (
+              <div className="space-y-2">
+                <Label htmlFor="refundReason">Refund Reason *</Label>
+                <Input
+                  id="refundReason"
+                  placeholder="Enter reason for refund"
+                  value={refundReason}
+                  onChange={(e) => setRefundReason(e.target.value)}
+                />
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex justify-end space-x-3 pt-4 border-t">
+              <Button
+                variant="outline"
+                onClick={() => setIsRefundDialogOpen(false)}
+              >
+                <X className="w-4 h-4 mr-2" />
+                Cancel
+              </Button>
+              {foundInvoice && (
+                <Button
+                  onClick={processInvoiceRefund}
+                  className="text-white bg-red-600 hover:bg-red-700"
+                  disabled={!refundReason.trim()}
+                >
+                  <AlertCircle className="w-4 h-4 mr-2" />
+                  Process Refund
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>

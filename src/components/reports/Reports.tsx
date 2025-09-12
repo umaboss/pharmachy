@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { apiService } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
+import ProfitSalesOverview from "./ProfitSalesOverview";
 
 const Reports = () => {
   const { user } = useAuth();
@@ -357,6 +358,9 @@ const Reports = () => {
           </Button>
         </div>
       </div>
+
+      {/* Profit and Sales Overview */}
+      <ProfitSalesOverview />
 
       {/* Period and Report Type Selection */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

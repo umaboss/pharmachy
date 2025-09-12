@@ -1,5 +1,6 @@
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import AppSidebar from "@/components/layout/AppSidebar";
+import { RoleBasedSidebar } from "@/components/layout/RoleBasedSidebar";
 import { Button } from "@/components/ui/button";
 import { Bell, Menu, LogOut, User } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -14,7 +15,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-background">
-        <AppSidebar />
+        <RoleBasedSidebar />
         
         <div className="flex-1 flex flex-col">
           {/* Top Header */}

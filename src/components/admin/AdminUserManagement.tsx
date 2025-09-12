@@ -27,7 +27,7 @@ interface User {
   id: string;
   name: string;
   email: string;
-  role: 'MANAGER' | 'CASHIER';
+  role: 'SUPERADMIN' | 'ADMIN' | 'MANAGER' | 'CASHIER';
   lastActive: string;
   status: 'active' | 'inactive';
   createdAt: string;
@@ -128,6 +128,8 @@ const AdminUserManagement = ({ adminId, adminName, branchId }: AdminUserManageme
 
   const getRoleColor = (role: string) => {
     switch (role) {
+      case 'SUPERADMIN': return 'bg-red-100 text-red-800';
+      case 'ADMIN': return 'bg-orange-100 text-orange-800';
       case 'MANAGER': return 'bg-blue-100 text-blue-800';
       case 'CASHIER': return 'bg-purple-100 text-purple-800';
       default: return 'bg-gray-100 text-gray-800';
@@ -136,8 +138,10 @@ const AdminUserManagement = ({ adminId, adminName, branchId }: AdminUserManageme
 
   const getRoleIcon = (role: string) => {
     switch (role) {
-      case 'MANAGER': return <Shield className="w-4 h-4" />;
-      case 'CASHIER': return <UserCheck className="w-4 h-4" />;
+      case 'SUPERADMIN': return <Crown className="w-4 h-4" />;
+      case 'ADMIN': return <Shield className="w-4 h-4" />;
+      case 'MANAGER': return <UserCheck className="w-4 h-4" />;
+      case 'CASHIER': return <Users className="w-4 h-4" />;
       default: return <Users className="w-4 h-4" />;
     }
   };
@@ -210,11 +214,13 @@ const AdminUserManagement = ({ adminId, adminName, branchId }: AdminUserManageme
 
               <div className="space-y-2">
                 <Label htmlFor="userRole">Role *</Label>
-                <Select value={newUser.role} onValueChange={(value: 'MANAGER' | 'CASHIER') => setNewUser({ ...newUser, role: value })}>
+                <Select value={newUser.role} onValueChange={(value: 'SUPERADMIN' | 'ADMIN' | 'MANAGER' | 'CASHIER') => setNewUser({ ...newUser, role: value })}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="SUPERADMIN">Super Admin</SelectItem>
+                    <SelectItem value="ADMIN">Admin</SelectItem>
                     <SelectItem value="MANAGER">Manager</SelectItem>
                     <SelectItem value="CASHIER">Cashier</SelectItem>
                   </SelectContent>

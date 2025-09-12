@@ -23,7 +23,13 @@ import {
   Wifi,
   WifiOff,
   Bell,
-  Shield
+  Shield,
+  RotateCcw,
+  UserCheck,
+  Clock,
+  Receipt,
+  Truck,
+  Award
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -40,26 +46,44 @@ const AppSidebar = () => {
   const cashierItems = [
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
     { title: "Point of Sale", url: "/pos", icon: ShoppingCart },
+    { title: "Invoices", url: "/invoices", icon: Receipt },
+    { title: "Refunds & Returns", url: "/refunds", icon: RotateCcw },
+    { title: "Inventory", url: "/inventory", icon: Package },
     { title: "Customers", url: "/customers", icon: Users },
+    // { title: "Check In/Out", url: "/checkin", icon: Clock },
+    { title: "Shift Management", url: "/shifts", icon: UserCheck },
+    { title: "Performance", url: "/performance", icon: TrendingUp },
   ];
 
   // Manager items - includes inventory and reports
   const managerItems = [
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
     { title: "Point of Sale", url: "/pos", icon: ShoppingCart },
+    { title: "Invoices", url: "/invoices", icon: Receipt },
+    { title: "Refunds & Returns", url: "/refunds", icon: RotateCcw },
     { title: "Inventory", url: "/inventory", icon: Package },
+    // { title: "Inventory Transfers", url: "/inventory-transfers", icon: Truck },
+    // { title: "Commission Tracking", url: "/commission", icon: Award },
     { title: "Customers", url: "/customers", icon: Users },
     { title: "Reports", url: "/reports", icon: TrendingUp },
+    // { title: "Check In/Out", url: "/checkin", icon: Clock },
+    // { title: "Employee Management", url: "/admin/employees", icon: UserCheck },
   ];
 
   // Admin items - full access
   const adminItems = [
     { title: "Dashboard", url: "/admin", icon: LayoutDashboard },
     { title: "Point of Sale", url: "/pos", icon: ShoppingCart },
+    { title: "Invoices", url: "/invoices", icon: Receipt },
+    { title: "Refunds & Returns", url: "/refunds", icon: RotateCcw },
     { title: "Inventory", url: "/inventory", icon: Package },
+    // { title: "Inventory Transfers", url: "/inventory-transfers", icon: Truck },
+    // { title: "Commission Tracking", url: "/commission", icon: Award },
     { title: "Customers", url: "/customers", icon: Users },
     { title: "Reports", url: "/reports", icon: TrendingUp },
+    // { title: "Check In/Out", url: "/checkin", icon: Clock },
     { title: "User Management", url: "/admin/users", icon: Shield },
+    // { title: "Employee Management", url: "/admin/employees", icon: UserCheck },
   ];
 
   // SuperAdmin items - platform management

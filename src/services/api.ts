@@ -17,12 +17,24 @@ class ApiService {
   constructor(baseURL: string) {
     this.baseURL = baseURL;
     this.token = localStorage.getItem('token');
+    
+    // Listen for storage changes to update token when user logs in from another tab
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'token') {
+        this.token = e.newValue;
+      }
+    });
   }
 
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
+    // Refresh token from localStorage in case it was updated
+    if (!this.token) {
+      this.token = localStorage.getItem('token');
+    }
+    
     const url = `${this.baseURL}${endpoint}`;
     
     console.log('API Request:', { url, options, token: this.token ? 'Present' : 'Missing' });
@@ -226,6 +238,55 @@ class ApiService {
     }>('/products', {
       method: 'POST',
       body: JSON.stringify(productData),
+    });
+  }
+
+  async bulkImportProducts(products: Array<{
+    name: string;
+    description?: string;
+    categoryId: string;
+    supplierId: string;
+    branchId: string;
+    costPrice: number;
+    sellingPrice: number;
+    stock: number;
+    minStock?: number;
+    maxStock?: number;
+    unitType: string;
+    unitsPerPack: number;
+    barcode?: string;
+    requiresPrescription?: boolean;
+  }>) {
+    return this.request<{
+      successful: Array<{
+        id: string;
+        name: string;
+        description?: string;
+        category: { id: string; name: string };
+        supplier: { id: string; name: string };
+        branch: { id: string; name: string };
+        costPrice: number;
+        sellingPrice: number;
+        stock: number;
+        minStock: number;
+        maxStock?: number;
+        unitType: string;
+        unitsPerPack: number;
+        barcode?: string;
+        requiresPrescription: boolean;
+        isActive: boolean;
+        createdAt: string;
+      }>;
+      failed: Array<{
+        product: any;
+        error: string;
+      }>;
+      total: number;
+      successCount: number;
+      failureCount: number;
+    }>('/products/bulk-import', {
+      method: 'POST',
+      body: JSON.stringify({ products }),
     });
   }
 
@@ -541,6 +602,71 @@ class ApiService {
         printedAt?: string;
       }>;
     }>(`/sales/${id}`);
+  }
+
+  async getSaleByReceiptNumber(receiptNumber: string) {
+    return this.request<{
+      id: string;
+      customerId?: string;
+      userId: string;
+      branchId: string;
+      subtotal: number;
+      taxAmount: number;
+      discountAmount: number;
+      totalAmount: number;
+      paymentMethod: string;
+      paymentStatus: string;
+      status: string;
+      createdAt: string;
+      customer?: {
+        id: string;
+        name: string;
+        phone: string;
+        email?: string;
+        address?: string;
+      };
+      user: {
+        id: string;
+        name: string;
+        username: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+        address: string;
+      };
+      items: Array<{
+        id: string;
+        productId: string;
+        quantity: number;
+        unitPrice: number;
+        totalPrice: number;
+        batchNumber?: string;
+        expiryDate?: string;
+        product: {
+          id: string;
+          name: string;
+          unitType: string;
+          barcode?: string;
+        };
+      }>;
+      receipts: Array<{
+        id: string;
+        receiptNumber: string;
+        printedAt?: string;
+      }>;
+    }>(`/sales/receipt/${receiptNumber}`);
+  }
+
+  async getAvailableReceiptNumbers() {
+    return this.request<{
+      receipts: Array<{
+        id: string;
+        receiptNumber: string;
+        saleId: string;
+        printedAt: string;
+      }>;
+    }>('/sales/receipts');
   }
 
   // Customer Purchase History
@@ -914,7 +1040,8 @@ class ApiService {
       adminId: string;
       lastActive: string;
       status: 'active' | 'inactive';
-      role: string;
+      role: 'SUPERADMIN' | 'ADMIN' | 'MANAGER' | 'CASHIER';
+      createdAt: string;
     }>>(`/admin/${adminId}/users`);
   }
 
@@ -993,7 +1120,7 @@ class ApiService {
     email: string;
     password: string;
     name: string;
-    role: 'MANAGER' | 'CASHIER';
+    role: 'SUPERADMIN' | 'ADMIN' | 'MANAGER' | 'CASHIER';
     branchId: string;
   }) {
     return this.request<{
@@ -1413,12 +1540,922 @@ class ApiService {
     }>>(`/dashboard/sales-by-payment?${params.toString()}`);
   }
 
+  // Employee Management
+  async getEmployees(params?: { page?: number; limit?: number; search?: string; status?: string; branchId?: string; isActive?: boolean }) {
+    const queryParams = new URLSearchParams();
+    if (params?.page) queryParams.append('page', params.page.toString());
+    if (params?.limit) queryParams.append('limit', params.limit.toString());
+    if (params?.search) queryParams.append('search', params.search);
+    if (params?.status) queryParams.append('status', params.status);
+    if (params?.branchId) queryParams.append('branchId', params.branchId);
+    if (params?.isActive !== undefined) queryParams.append('isActive', params.isActive.toString());
+    
+    return this.request<{
+      employees: Array<{
+        id: string;
+        employeeId: string;
+        name: string;
+        email: string;
+        phone?: string;
+        address?: string;
+        position: string;
+        department?: string;
+        salary?: number;
+        hireDate: string;
+        status: string;
+        branchId: string;
+        branch: {
+          id: string;
+          name: string;
+        };
+        emergencyContactName?: string;
+        emergencyContactPhone?: string;
+        emergencyContactRelation?: string;
+        isActive: boolean;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    }>(`/employees?${queryParams.toString()}`);
+  }
+
+  async getEmployee(id: string) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      name: string;
+      email: string;
+      phone?: string;
+      address?: string;
+      position: string;
+      department?: string;
+      salary?: number;
+      hireDate: string;
+      status: string;
+      branchId: string;
+      branch: {
+        id: string;
+        name: string;
+      };
+      emergencyContactName?: string;
+      emergencyContactPhone?: string;
+      emergencyContactRelation?: string;
+      isActive: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }>(`/employees/${id}`);
+  }
+
+  async createEmployee(employeeData: {
+    name: string;
+    email: string;
+    phone?: string;
+    address?: string;
+    position: string;
+    department?: string;
+    salary?: number;
+    hireDate: string;
+    status?: string;
+    branchId: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
+    emergencyContactRelation?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      name: string;
+      email: string;
+      phone?: string;
+      address?: string;
+      position: string;
+      department?: string;
+      salary?: number;
+      hireDate: string;
+      status: string;
+      branchId: string;
+      branch: {
+        id: string;
+        name: string;
+      };
+      emergencyContactName?: string;
+      emergencyContactPhone?: string;
+      emergencyContactRelation?: string;
+      isActive: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }>('/employees', {
+      method: 'POST',
+      body: JSON.stringify(employeeData)
+    });
+  }
+
+  async updateEmployee(id: string, employeeData: {
+    name?: string;
+    email?: string;
+    phone?: string;
+    address?: string;
+    position?: string;
+    department?: string;
+    salary?: number;
+    hireDate?: string;
+    status?: string;
+    branchId?: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
+    emergencyContactRelation?: string;
+    isActive?: boolean;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      name: string;
+      email: string;
+      phone?: string;
+      address?: string;
+      position: string;
+      department?: string;
+      salary?: number;
+      hireDate: string;
+      status: string;
+      branchId: string;
+      branch: {
+        id: string;
+        name: string;
+      };
+      emergencyContactName?: string;
+      emergencyContactPhone?: string;
+      emergencyContactRelation?: string;
+      isActive: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }>(`/employees/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(employeeData)
+    });
+  }
+
+  async deleteEmployee(id: string) {
+    return this.request<{ message: string }>(`/employees/${id}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async getEmployeeStats(branchId?: string) {
+    const params = new URLSearchParams();
+    if (branchId) params.append('branchId', branchId);
+    
+    return this.request<{
+      totalEmployees: number;
+      activeEmployees: number;
+      inactiveEmployees: number;
+      terminatedEmployees: number;
+      onLeaveEmployees: number;
+    }>(`/employees/stats?${params.toString()}`);
+  }
+
+  // Attendance Management
+  async checkIn(attendanceData: {
+    employeeId: string;
+    branchId: string;
+    notes?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      checkIn: string;
+      checkOut?: string;
+      totalHours?: number;
+      status: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>('/attendance/check-in', {
+      method: 'POST',
+      body: JSON.stringify(attendanceData)
+    });
+  }
+
+  async checkOut(attendanceData: {
+    attendanceId: string;
+    notes?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      checkIn: string;
+      checkOut: string;
+      totalHours: number;
+      status: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>('/attendance/check-out', {
+      method: 'POST',
+      body: JSON.stringify(attendanceData)
+    });
+  }
+
+  async getAttendance(params?: {
+    page?: number;
+    limit?: number;
+    employeeId?: string;
+    branchId?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          queryParams.append(key, value.toString());
+        }
+      });
+    }
+    
+    return this.request<{
+      attendance: Array<{
+        id: string;
+        employeeId: string;
+        branchId: string;
+        checkIn: string;
+        checkOut?: string;
+        totalHours?: number;
+        status: string;
+        notes?: string;
+        employee: {
+          id: string;
+          name: string;
+          employeeId: string;
+          position: string;
+        };
+        branch: {
+          id: string;
+          name: string;
+        };
+        createdAt: string;
+      }>;
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    }>(`/attendance?${queryParams.toString()}`);
+  }
+
+  async getTodayAttendance(employeeId: string) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      checkIn: string;
+      checkOut?: string;
+      totalHours?: number;
+      status: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>(`/attendance/today/${employeeId}`);
+  }
+
+  async getAttendanceStats(params?: {
+    branchId?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          queryParams.append(key, value.toString());
+        }
+      });
+    }
+    
+    return this.request<{
+      totalRecords: number;
+      presentCount: number;
+      absentCount: number;
+      lateCount: number;
+      halfDayCount: number;
+      leaveCount: number;
+    }>(`/attendance/stats?${queryParams.toString()}`);
+  }
+
+  // Shift Management
+  async startShift(shiftData: {
+    employeeId: string;
+    branchId: string;
+    shiftDate: string;
+    startTime: string;
+    openingBalance?: number;
+    notes?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      shiftDate: string;
+      startTime: string;
+      endTime?: string;
+      openingBalance: number;
+      cashIn: number;
+      cashOut: number;
+      expectedBalance?: number;
+      actualBalance?: number;
+      difference?: number;
+      status: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>('/shifts/start', {
+      method: 'POST',
+      body: JSON.stringify(shiftData)
+    });
+  }
+
+  async endShift(shiftData: {
+    shiftId: string;
+    endTime: string;
+    actualBalance: number;
+    notes?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      shiftDate: string;
+      startTime: string;
+      endTime: string;
+      openingBalance: number;
+      cashIn: number;
+      cashOut: number;
+      expectedBalance: number;
+      actualBalance: number;
+      difference: number;
+      status: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>('/shifts/end', {
+      method: 'POST',
+      body: JSON.stringify(shiftData)
+    });
+  }
+
+  async getShifts(params?: {
+    page?: number;
+    limit?: number;
+    employeeId?: string;
+    branchId?: string;
+    status?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          queryParams.append(key, value.toString());
+        }
+      });
+    }
+    
+    return this.request<{
+      shifts: Array<{
+        id: string;
+        employeeId: string;
+        branchId: string;
+        shiftDate: string;
+        startTime: string;
+        endTime?: string;
+        openingBalance: number;
+        cashIn: number;
+        cashOut: number;
+        expectedBalance?: number;
+        actualBalance?: number;
+        difference?: number;
+        status: string;
+        notes?: string;
+        employee: {
+          id: string;
+          name: string;
+          employeeId: string;
+          position: string;
+        };
+        branch: {
+          id: string;
+          name: string;
+        };
+        createdAt: string;
+      }>;
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    }>(`/shifts?${queryParams.toString()}`);
+  }
+
+  async getActiveShift(employeeId: string) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      shiftDate: string;
+      startTime: string;
+      endTime?: string;
+      openingBalance: number;
+      cashIn: number;
+      cashOut: number;
+      expectedBalance?: number;
+      actualBalance?: number;
+      difference?: number;
+      status: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>(`/shifts/active/${employeeId}`);
+  }
+
+  async updateShift(shiftId: string, shiftData: {
+    cashIn?: number;
+    cashOut?: number;
+    notes?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      shiftDate: string;
+      startTime: string;
+      endTime?: string;
+      openingBalance: number;
+      cashIn: number;
+      cashOut: number;
+      expectedBalance?: number;
+      actualBalance?: number;
+      difference?: number;
+      status: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>(`/shifts/${shiftId}`, {
+      method: 'PUT',
+      body: JSON.stringify(shiftData)
+    });
+  }
+
+  async getShiftStats(params?: {
+    branchId?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          queryParams.append(key, value.toString());
+        }
+      });
+    }
+    
+    return this.request<{
+      totalShifts: number;
+      activeShifts: number;
+      completedShifts: number;
+      cancelledShifts: number;
+      totalCashIn: number;
+      totalCashOut: number;
+      totalDifference: number;
+    }>(`/shifts/stats?${queryParams.toString()}`);
+  }
+
+  // Commission Management
+  async calculateCommission(commissionData: {
+    employeeId: string;
+    branchId: string;
+    period: string;
+    periodType?: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+    baseRate?: number;
+    bonusRate?: number;
+    notes?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      period: string;
+      periodType: string;
+      totalSales: number;
+      totalTransactions: number;
+      averageSale: number;
+      baseRate: number;
+      bonusRate: number;
+      totalCommission: number;
+      bonusAmount: number;
+      totalAmount: number;
+      status: string;
+      paidAt?: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>('/commissions/calculate', {
+      method: 'POST',
+      body: JSON.stringify(commissionData)
+    });
+  }
+
+  async getCommissions(params?: {
+    page?: number;
+    limit?: number;
+    employeeId?: string;
+    branchId?: string;
+    status?: string;
+    periodType?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          queryParams.append(key, value.toString());
+        }
+      });
+    }
+    
+    return this.request<{
+      commissions: Array<{
+        id: string;
+        employeeId: string;
+        branchId: string;
+        period: string;
+        periodType: string;
+        totalSales: number;
+        totalTransactions: number;
+        averageSale: number;
+        baseRate: number;
+        bonusRate: number;
+        totalCommission: number;
+        bonusAmount: number;
+        totalAmount: number;
+        status: string;
+        paidAt?: string;
+        notes?: string;
+        employee: {
+          id: string;
+          name: string;
+          employeeId: string;
+          position: string;
+        };
+        branch: {
+          id: string;
+          name: string;
+        };
+        createdAt: string;
+      }>;
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    }>(`/commissions?${queryParams.toString()}`);
+  }
+
+  async getCommission(commissionId: string) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      period: string;
+      periodType: string;
+      totalSales: number;
+      totalTransactions: number;
+      averageSale: number;
+      baseRate: number;
+      bonusRate: number;
+      totalCommission: number;
+      bonusAmount: number;
+      totalAmount: number;
+      status: string;
+      paidAt?: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>(`/commissions/${commissionId}`);
+  }
+
+  async updateCommission(commissionId: string, commissionData: {
+    status?: 'PENDING' | 'APPROVED' | 'PAID' | 'CANCELLED';
+    notes?: string;
+  }) {
+    return this.request<{
+      id: string;
+      employeeId: string;
+      branchId: string;
+      period: string;
+      periodType: string;
+      totalSales: number;
+      totalTransactions: number;
+      averageSale: number;
+      baseRate: number;
+      bonusRate: number;
+      totalCommission: number;
+      bonusAmount: number;
+      totalAmount: number;
+      status: string;
+      paidAt?: string;
+      notes?: string;
+      employee: {
+        id: string;
+        name: string;
+        employeeId: string;
+        position: string;
+      };
+      branch: {
+        id: string;
+        name: string;
+      };
+      createdAt: string;
+    }>(`/commissions/${commissionId}`, {
+      method: 'PUT',
+      body: JSON.stringify(commissionData)
+    });
+  }
+
+  async getCommissionStats(params?: {
+    branchId?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          queryParams.append(key, value.toString());
+        }
+      });
+    }
+    
+    return this.request<{
+      totalCommissions: number;
+      pendingCommissions: number;
+      approvedCommissions: number;
+      paidCommissions: number;
+      cancelledCommissions: number;
+      totalAmount: number;
+      totalPaidAmount: number;
+    }>(`/commissions/stats?${queryParams.toString()}`);
+  }
+
+  async getEmployeePerformance(employeeId: string, params?: {
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          queryParams.append(key, value.toString());
+        }
+      });
+    }
+    
+    return this.request<{
+      sales: {
+        totalSales: number;
+        totalTransactions: number;
+        averageSale: number;
+      };
+      commissions: {
+        totalCommissions: number;
+        totalAmount: number;
+        totalCommission: number;
+        totalBonus: number;
+      };
+      recentCommissions: Array<{
+        id: string;
+        period: string;
+        periodType: string;
+        totalAmount: number;
+        status: string;
+        createdAt: string;
+        branch: {
+          id: string;
+          name: string;
+        };
+      }>;
+    }>(`/commissions/performance/${employeeId}?${queryParams.toString()}`);
+  }
+
+  // Branch Management
+  async getBranches(params?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.page) query.append('page', params.page.toString());
+    if (params?.limit) query.append('limit', params.limit.toString());
+    if (params?.search) query.append('search', params.search);
+    
+    return this.request<{
+      branches: Array<{
+        id: string;
+        name: string;
+        address: string;
+        phone: string;
+        email: string;
+        managerId?: string;
+        isActive: boolean;
+        createdAt: string;
+        _count: {
+          users: number;
+          products: number;
+          customers: number;
+        };
+      }>;
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    }>(`/branches${query.toString() ? `?${query.toString()}` : ''}`);
+  }
+
+  async getBranch(id: string) {
+    return this.request<{
+      id: string;
+      name: string;
+      address: string;
+      phone: string;
+      email: string;
+      managerId?: string;
+      isActive: boolean;
+      createdAt: string;
+      _count: {
+        users: number;
+        products: number;
+        customers: number;
+      };
+    }>(`/branches/${id}`);
+  }
+
+  async createBranch(branchData: {
+    name: string;
+    address: string;
+    phone: string;
+    email: string;
+    managerId?: string;
+  }) {
+    return this.request<{
+      id: string;
+      name: string;
+      address: string;
+      phone: string;
+      email: string;
+      managerId?: string;
+      isActive: boolean;
+      createdAt: string;
+    }>('/branches', {
+      method: 'POST',
+      body: JSON.stringify(branchData),
+    });
+  }
+
+  async updateBranch(id: string, branchData: {
+    name?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+    managerId?: string;
+    isActive?: boolean;
+  }) {
+    return this.request<{
+      id: string;
+      name: string;
+      address: string;
+      phone: string;
+      email: string;
+      managerId?: string;
+      isActive: boolean;
+      createdAt: string;
+    }>(`/branches/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(branchData),
+    });
+  }
+
+  async deleteBranch(id: string) {
+    return this.request<{
+      success: boolean;
+      message: string;
+    }>(`/branches/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Logout
   logout() {
     this.token = null;
     localStorage.removeItem('token');
     localStorage.removeItem('user');
   }
+
 }
 
 export const apiService = new ApiService(API_BASE_URL);

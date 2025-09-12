@@ -28,8 +28,7 @@ interface Branch {
 const LoginForm = ({ onLogin }: LoginFormProps) => {
   const [formData, setFormData] = useState({
     username: "",
-    password: "",
-    branch: ""
+    password: ""
   });
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -44,19 +43,40 @@ const LoginForm = ({ onLogin }: LoginFormProps) => {
   const loadBranches = async () => {
     try {
       const response = await apiService.getBranches();
+      
       if (response.success && response.data) {
-        setBranches(response.data.branches);
+        // Handle the response structure - check if it has a branches property
+        let branchesArray: Branch[] = [];
+        if (response.data.branches && Array.isArray(response.data.branches)) {
+          branchesArray = response.data.branches;
+        } else if (Array.isArray(response.data)) {
+          branchesArray = response.data;
+        } else {
+          setFallbackBranches();
+          return;
+        }
+        
+        setBranches(branchesArray);
+      } else {
+        setFallbackBranches();
       }
     } catch (error) {
       console.error('Error loading branches:', error);
-      // Fallback to demo branches if API fails
-      setBranches([
-        { id: "1", name: "Head Office", address: "123 Main Street", phone: "+92 21 1234567", email: "head@medibill.com" },
-        { id: "2", name: "Main Branch", address: "456 Central Avenue", phone: "+92 42 2345678", email: "main@medibill.com" },
-        { id: "3", name: "North Branch", address: "789 North Road", phone: "+92 51 3456789", email: "north@medibill.com" },
-        { id: "4", name: "South Branch", address: "321 South Street", phone: "+92 21 4567890", email: "south@medibill.com" }
-      ]);
+      setFallbackBranches();
     }
+  };
+
+  const setFallbackBranches = () => {
+    const fallbackBranches = [
+      { id: "1", name: "Head Office", address: "123 Main Street, Lahore", phone: "+92 21 1234567", email: "head@medibill.com" },
+      { id: "2", name: "Main Branch", address: "456 Central Avenue, Lahore", phone: "+92 42 2345678", email: "main@medibill.com" },
+      { id: "3", name: "North Branch", address: "789 North Road, Lahore", phone: "+92 51 3456789", email: "north@medibill.com" },
+      { id: "4", name: "South Branch", address: "321 South Street, Lahore", phone: "+92 21 4567890", email: "south@medibill.com" },
+      { id: "5", name: "Talha Branch", address: "555 Talha Plaza, Karachi", phone: "+92 21 5555555", email: "talha@medibill.com" },
+      { id: "6", name: "Gulberg Branch", address: "777 Gulberg Main, Lahore", phone: "+92 42 7777777", email: "gulberg@medibill.com" },
+      { id: "7", name: "DHA Branch", address: "999 DHA Phase 5, Lahore", phone: "+92 42 9999999", email: "dha@medibill.com" }
+    ];
+    setBranches(fallbackBranches);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -178,11 +198,15 @@ const LoginForm = ({ onLogin }: LoginFormProps) => {
                     required
                   >
                     <option value="">Select your branch</option>
-                    {branches.map((branch) => (
-                      <option key={branch.id} value={branch.name}>
-                        {branch.name}
-                      </option>
-                    ))}
+                    {branches.length > 0 ? (
+                      branches.map((branch) => (
+                        <option key={branch.id} value={branch.name}>
+                          {branch.name}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>Loading branches...</option>
+                    )}
                   </select>
                 </div>
               </div>
@@ -210,6 +234,7 @@ const LoginForm = ({ onLogin }: LoginFormProps) => {
                 )}
               </Button>
             </form>
+
 
             {/* Demo Credentials */}
             <div className="mt-6 p-4 bg-gray-50 rounded-lg">

@@ -17,8 +17,19 @@ import SettingsPage from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import AdminDashboard from "./components/dashboard/AdminDashboard";
 import UserManagement from "./components/admin/UserManagement";
+import EmployeeManagement from "./components/admin/EmployeeManagement";
 import AdminReports from "./components/admin/AdminReports";
+import RoleManagement from "./components/admin/RoleManagement";
 import SuperAdmin from "./pages/SuperAdmin";
+import { RoleBasedDashboard } from "./components/dashboard/RoleBasedDashboard";
+import { RoleBasedSidebar } from "./components/layout/RoleBasedSidebar";
+import Refunds from "./components/pos/Refunds";
+import Invoices from "./components/pos/Invoices";
+import EmployeeCheckIn from "./components/pos/EmployeeCheckIn";
+import ShiftManagement from "./components/pos/ShiftManagement";
+import PerformanceTracking from "./components/pos/PerformanceTracking";
+import InventoryTransfers from "./components/inventory/InventoryTransfers";
+import CommissionTracking from "./components/pos/CommissionTracking";
 
 const queryClient = new QueryClient();
 
@@ -47,8 +58,17 @@ const RoleProtectedRoute = ({
     return <Navigate to="/login" replace />;
   }
   
-  if (!allowedRoles.includes(user?.role?.toLowerCase() || '')) {
-    return <Navigate to="/" replace />;
+  if (!allowedRoles.includes(user?.role || '')) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-foreground mb-2">Access Denied</h2>
+          <p className="text-muted-foreground">
+            You don't have permission to access this page.
+          </p>
+        </div>
+      </div>
+    );
   }
   
   return <>{children}</>;
@@ -68,7 +88,7 @@ const AppRoutes = () => {
         {/* Public Routes - All authenticated users */}
         <Route path="/" element={
           <MainLayout>
-            <Index />
+            <RoleBasedDashboard />
           </MainLayout>
         } />
         <Route path="/pos" element={
@@ -81,17 +101,56 @@ const AppRoutes = () => {
             <CustomersPage />
           </MainLayout>
         } />
+        <Route path="/invoices" element={
+          <MainLayout>
+            <Invoices />
+          </MainLayout>
+        } />
+        <Route path="/refunds" element={
+          <MainLayout>
+            <Refunds />
+          </MainLayout>
+        } />
+        <Route path="/checkin" element={
+          <MainLayout>
+            <EmployeeCheckIn />
+          </MainLayout>
+        } />
+        <Route path="/shifts" element={
+          <MainLayout>
+            <ShiftManagement />
+          </MainLayout>
+        } />
+        <Route path="/performance" element={
+          <MainLayout>
+            <PerformanceTracking />
+          </MainLayout>
+        } />
         
         {/* Manager & Admin Routes */}
+        <Route path="/inventory-transfers" element={
+          <RoleProtectedRoute allowedRoles={['MANAGER', 'SUPER_ADMIN']}>
+            <MainLayout>
+              <InventoryTransfers />
+            </MainLayout>
+          </RoleProtectedRoute>
+        } />
+        <Route path="/commission" element={
+          <RoleProtectedRoute allowedRoles={['MANAGER', 'SUPER_ADMIN']}>
+            <MainLayout>
+              <CommissionTracking />
+            </MainLayout>
+          </RoleProtectedRoute>
+        } />
         <Route path="/inventory" element={
-          <RoleProtectedRoute allowedRoles={['manager', 'admin']}>
+          <RoleProtectedRoute allowedRoles={['MANAGER', 'SUPER_ADMIN', 'PHARMACIST']}>
             <MainLayout>
               <InventoryPage />
             </MainLayout>
           </RoleProtectedRoute>
         } />
         <Route path="/reports" element={
-          <RoleProtectedRoute allowedRoles={['manager', 'admin']}>
+          <RoleProtectedRoute allowedRoles={['MANAGER', 'SUPER_ADMIN', 'PHARMACIST', 'CASHIER']}>
             <MainLayout>
               <ReportsPage />
             </MainLayout>
@@ -107,21 +166,35 @@ const AppRoutes = () => {
         
         {/* Admin Only Routes */}
         <Route path="/admin" element={
-          <RoleProtectedRoute allowedRoles={['admin']}>
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN']}>
             <MainLayout>
               <AdminDashboard />
             </MainLayout>
           </RoleProtectedRoute>
         } />
         <Route path="/admin/users" element={
-          <RoleProtectedRoute allowedRoles={['admin']}>
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'PRODUCT_OWNER']}>
             <MainLayout>
               <UserManagement />
             </MainLayout>
           </RoleProtectedRoute>
         } />
+        <Route path="/admin/employees" element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'MANAGER']}>
+            <MainLayout>
+              <EmployeeManagement />
+            </MainLayout>
+          </RoleProtectedRoute>
+        } />
+        <Route path="/admin/roles" element={
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'PRODUCT_OWNER']}>
+            <MainLayout>
+              <RoleManagement />
+            </MainLayout>
+          </RoleProtectedRoute>
+        } />
         <Route path="/admin/reports" element={
-          <RoleProtectedRoute allowedRoles={['admin']}>
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN']}>
             <MainLayout>
               <AdminReports />
             </MainLayout>
@@ -130,7 +203,7 @@ const AppRoutes = () => {
         
         {/* SuperAdmin Routes */}
         <Route path="/superadmin" element={
-          <RoleProtectedRoute allowedRoles={['superadmin']}>
+          <RoleProtectedRoute allowedRoles={['SUPER_ADMIN', 'PRODUCT_OWNER']}>
             <SuperAdmin />
           </RoleProtectedRoute>
         } />
